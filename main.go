@@ -335,7 +335,7 @@ func (g *Game) Update() error {
 		g.inv--
 	}
 
-	// Shooting: hold Space or J to fire, limited by cooldown.
+	// Shooting: hold Space or J to fire, limited by cooldown
 	if g.cooldown > 0 {
 		g.cooldown--
 	}
@@ -350,7 +350,7 @@ func (g *Game) Update() error {
 		g.play(g.sShoot)
 	}
 
-	// Enemy spawns for current round (up to its quota).
+	// Enemy spawns for current round
 	g.spawnTimer--
 	if g.spawnTimer <= 0 && g.roundIdx < len(rounds) {
 		if g.roundSpawned < rounds[g.roundIdx] {
@@ -461,7 +461,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	// draw player (blink while in i-frames)
+	// draw player 
 	if g.playerImg != nil {
 		w, h := g.playerImg.Bounds().Dx(), g.playerImg.Bounds().Dy()
 		op := &ebiten.DrawImageOptions{}
@@ -512,7 +512,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		return
 	}
 
-	// simple HUD to show progress + speeds (helps during the demo)
+	// simple HUD to show progress + speeds 
 	msg := fmt.Sprintf(
 		"Round: %d/6 | Kills: %d/%d\nLives: %d | FireDelay: %d | EnemySpd: %.2f",
 		g.roundIdx+1,
