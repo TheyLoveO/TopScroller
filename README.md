@@ -3,5 +3,5 @@ A Space ninja is defending his homeland from a clan of space zombies, he has to 
 
 EACH ROUND MEANS MORE ZOMBIES
 THEY GET FASTER
-BUT OUR GUN IS FASTER
+BUT OUR GUN IS FASTERer
 DEFEND YOUR HOMELAND
