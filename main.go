@@ -1,11 +1,15 @@
+
+// TOP SCROLLER 
+
+
 package main
 
 import (
 	"bytes"
 	"fmt"
 	"image/color"
-	_ "image/jpeg" // let ebiten load .jpg backgrounds
-	_ "image/png"  // let ebiten load .png backgrounds
+	_ "image/jpeg" // register .jpg decoder so ebiten can load jpg
+	_ "image/png"  // register .png decoder so ebiten can load png
 	"log"
 	"math"
 	"math/rand"
@@ -21,7 +25,8 @@ import (
 	"github.com/solarlune/resolv"
 )
 
-// basic set up
+// === BASIC SETTINGS (constants) ===
+// window is tall → vertical scroller feel
 const (
 	screenW = 480
 	screenH = 640
@@ -30,53 +35,50 @@ const (
 	playerSpeed = 3.0
 
 	bulletSize  = 26.0
-	bulletSpeed = -6.0 // bullets go upward
+	bulletSpeed = -6.0 // negative y = move up
 	enemySize   = 38.0
 
-	baseEnemySpeed    = 1.1
-	baseSpawnInterval = 32
-	minSpawnInterval  = 12
+	baseEnemySpeed    = 1.1  // starting enemy speed
+	baseSpawnInterval = 32   // frames between spawns at start
+	minSpawnInterval  = 12   // lower bound so it doesn't get unfair
+	startLives        = 2    // 2 hits allowed, 3rd = game over
+	iframeTicks       = 60   // brief invuln after hit (prevents multi-hit)
 
-	startLives  = 2  // you can be hit twice; next hit ends the game
-	iframeTicks = 60 // small invulnerability window after a hit
-
-	// centered message panel (used for win/lose text only)
+	// win/lose panel dims
 	panelW = 320
 	panelH = 120
 
-	// background scroll speed (pixels per frame)
+	// background scroll speed (pixels/frame)
 	bgScrollSpeed = 1.2
 
-	// audio (simple beeps if files are missing)
+	// audio sample rate
 	sampleRate = 44100
 )
 
-// 6 rounds total — you clear the game after the last one.
-var rounds = []int{6, 12, 18, 24, 30, 42}
+// 6 rounds total. clear last = win.
+var rounds = []int{6, 12, 18, 24, 30, 42} // kills needed per round
 
-// tags help Resolv filter which shapes to test against
+// tags → filter collisions by type
 var (
 	tagEnemy  = resolv.NewTag("enemy")
 	tagBullet = resolv.NewTag("bullet")
 )
 
-// tiny data structs
+// === DATA MODELS ===
+
 type bullet struct {
 	x, y float64
 	vy   float64
-	sh   resolv.IShape // collision box
+	sh   resolv.IShape //  bullet collision box
 }
 
 type enemy struct {
 	x, y float64
 	vy   float64
-	sh   resolv.IShape // collision box
+	sh   resolv.IShape //  Enemy collision box
 }
 
-// used only if there is no background image
-type star struct{ x, y, v float64 }
-
-// whole game state
+// full game state
 type Game struct {
 	// player
 	px, py   float64
@@ -85,8 +87,7 @@ type Game struct {
 	// world
 	bullets []bullet
 	enemies []enemy
-	space   *resolv.Space
-	stars   []star // fallback “star field” background
+	space   *resolv.Space // collision grid
 
 	// round progress
 	roundIdx     int
@@ -95,34 +96,36 @@ type Game struct {
 	totalKills   int
 
 	// timers
-	cooldown   int // fire rate delay
-	spawnTimer int // enemy spawn interval
+	cooldown   int // shot delay
+	spawnTimer int // enemy spawn cadence
 
-	// health + end flags
+	// end state
 	lives int
-	inv   int // i-frames (blink time after hit)
-	win   bool
-	over  bool
+	inv   int  // i-frames
+	win   bool // all rounds cleared
+	over  bool // out of lives
 
-	// audio (kept tiny and simple)
+	// audio
 	audioCtx *audio.Context
 	sShoot   *audio.Player
 	sHit     *audio.Player
 
-	// optional sprites (nil → draw rectangles)
+	// optional sprites (nil → draw rects)
 	playerImg *ebiten.Image
 	zombieImg *ebiten.Image
 	bulletImg *ebiten.Image
 
-	// background image + scroll offset
+	// background + scroll
 	bgImg *ebiten.Image
 	bgOff float64
 
 	rng *rand.Rand
 }
 
-// pacing helpers (simple math)
+// === DIFFICULTY HELPERS ===
+
 func enemySpeed(r int) float64 { return baseEnemySpeed + 0.3*float64(r) }
+
 func spawnInterval(r int) int {
 	n := baseSpawnInterval - 2*r
 	if n < minSpawnInterval {
@@ -130,7 +133,8 @@ func spawnInterval(r int) int {
 	}
 	return n
 }
-func fireDelay(r int) int { // bullets fire a tiny bit faster later
+
+func fireDelay(r int) int {
 	d := 10 - r/2
 	if d < 8 {
 		d = 8
@@ -138,52 +142,46 @@ func fireDelay(r int) int { // bullets fire a tiny bit faster later
 	return d
 }
 
-// new game setup
+// === NEW GAME SETUP ===
+
 func newGame() *Game {
 	g := &Game{rng: rand.New(rand.NewSource(time.Now().UnixNano()))}
 
-	// place player near bottom-middle
+	// spawns player near bottom center (coords = top-left)
 	g.px = screenW/2 - playerSize/2
 	g.py = screenH - 2*playerSize
 
-	// Resolv collision space (grid is 32x32 cells)
+	// resolv space (32x32 cells)
 	g.space = resolv.NewSpace(screenW, screenH, 32, 32)
 	g.playerSh = resolv.NewRectangleFromTopLeft(g.px, g.py, playerSize, playerSize)
 	g.space.Add(g.playerSh)
 
-	// round counters
+	// round + health init
 	g.roundIdx, g.roundSpawned, g.roundKills, g.totalKills = 0, 0, 0, 0
 	g.lives, g.inv, g.win, g.over = startLives, 0, false, false
 	g.spawnTimer = spawnInterval(0)
 
-	// make some stars in case there is no background image
-	g.stars = make([]star, 60)
-	for i := range g.stars {
-		g.stars[i] = star{
-			x: g.rng.Float64() * (screenW - 2),
-			y: g.rng.Float64()*screenH - screenH,
-			v: 0.5 + g.rng.Float64(),
-		}
-	}
+	// assets (fallbacks keep it runnable without files)
+	g.initAudio()
+	g.initImages()
 
-	g.initAudio()  // try to load two WAVs; fall back to beeps
-	g.initImages() // background + (optional) player/enemy/bullet images
 	return g
 }
 
-// audio: WAVs or small beeps
+// === AUDIO ===
+
 func (g *Game) initAudio() {
 	g.audioCtx = audio.NewContext(sampleRate)
 
 	if p, err := loadWav(g.audioCtx, "assets/shoot.wav"); err == nil {
 		g.sShoot = p
 	} else {
-		g.sShoot = newBeep(g.audioCtx, 950, 0.07) // fallback beep
+		g.sShoot = newBeep(g.audioCtx, 950, 0.07)
 	}
 	if p, err := loadWav(g.audioCtx, "assets/hit.wav"); err == nil {
 		g.sHit = p
 	} else {
-		g.sHit = newBeep(g.audioCtx, 240, 0.12) // fallback beep
+		g.sHit = newBeep(g.audioCtx, 240, 0.12)
 	}
 }
 
@@ -200,15 +198,14 @@ func loadWav(ctx *audio.Context, path string) (*audio.Player, error) {
 	return audio.NewPlayer(ctx, s)
 }
 
-// tiny wrapper so bytes.Reader acts like a closable stream
 type readSeekNopCloser struct{ *bytes.Reader }
 
 func (r *readSeekNopCloser) Close() error { return nil }
 
-// synthesize a quick sine beep (keeps the project self-contained)
+// simple sine beep fallback (16-bit mono)
 func newBeep(ctx *audio.Context, freq float64, durSec float64) *audio.Player {
 	n := int(float64(sampleRate) * durSec)
-	pcm := make([]byte, n*2) // 16-bit mono
+	pcm := make([]byte, n*2)
 	amp := 0.35
 	for i := 0; i < n; i++ {
 		v := math.Sin(2 * math.Pi * freq * float64(i) / float64(sampleRate))
@@ -229,9 +226,10 @@ func (g *Game) play(p *audio.Player) {
 	p.Play()
 }
 
-// load images (with fallbacks)
+// === IMAGES ===
+
 func (g *Game) initImages() {
-	// try a few common names for background (png/jpg)
+	// background: try a few common names
 	for _, name := range []string{
 		"assets/background.png", "assets/space.png",
 		"assets/background.jpg", "assets/space.jpg",
@@ -242,10 +240,10 @@ func (g *Game) initImages() {
 		}
 	}
 	if g.bgImg == nil {
-		log.Println("no background image found; using star fallback")
+		log.Println("no background found (runs anyway)")
 	}
 
-	// sprites; if missing we draw rectangles
+	// optional sprites (nil → draw rects)
 	if img, _, err := ebitenutil.NewImageFromFile("assets/ninja.png"); err == nil {
 		g.playerImg = img
 	} else if img, _, err := ebitenutil.NewImageFromFile("assets/player.png"); err == nil {
@@ -263,47 +261,34 @@ func (g *Game) initImages() {
 	}
 }
 
-// simple life loss helper
+// === DAMAGE ===
+
 func (g *Game) loseLife() {
 	if g.inv > 0 || g.win || g.over {
 		return
 	}
 	g.lives--
 	g.inv = iframeTicks
-	g.play(g.sHit) // small hit sound
+	g.play(g.sHit)
 	if g.lives < 0 {
 		g.over = true
 	}
 }
 
-// main game loop (logic)
+// === UPDATE (logic) ===
+
 func (g *Game) Update() error {
-
-	// When win/over is reached, we just stop updating gameplay.
-
-	// If already ended, do nothing (freeze the state).
+	// stop logic after end state
 	if g.win || g.over {
 		return nil
 	}
 
-	// Scroll background (tile same image vertically), or update stars.
+	// background scroll accumulator (wrap happens in Draw)
 	if g.bgImg != nil {
-		h := g.bgImg.Bounds().Dy()
 		g.bgOff += bgScrollSpeed
-		if h > 0 && g.bgOff >= float64(h) {
-			g.bgOff -= float64(h)
-		}
-	} else {
-		for i := range g.stars {
-			g.stars[i].y += g.stars[i].v
-			if g.stars[i].y > screenH {
-				g.stars[i].y = -2
-				g.stars[i].x = g.rng.Float64() * (screenW - 2)
-			}
-		}
 	}
 
-	// Basic movement (arrows or WASD) + clamp to screen.
+	// input: arrows/WASD
 	if ebiten.IsKeyPressed(ebiten.KeyLeft) || ebiten.IsKeyPressed(ebiten.KeyA) {
 		g.px -= playerSpeed
 	}
@@ -316,6 +301,8 @@ func (g *Game) Update() error {
 	if ebiten.IsKeyPressed(ebiten.KeyDown) || ebiten.IsKeyPressed(ebiten.KeyS) {
 		g.py += playerSpeed
 	}
+
+	// clamp to screen
 	if g.px < 0 {
 		g.px = 0
 	}
@@ -330,12 +317,12 @@ func (g *Game) Update() error {
 	}
 	g.playerSh.SetPosition(g.px, g.py)
 
-	// tick down invulnerability frames
+	// tick i-frames
 	if g.inv > 0 {
 		g.inv--
 	}
 
-	// Shooting: hold Space or J to fire, limited by cooldown
+	// shooting (Space/J) with cooldown
 	if g.cooldown > 0 {
 		g.cooldown--
 	}
@@ -350,7 +337,7 @@ func (g *Game) Update() error {
 		g.play(g.sShoot)
 	}
 
-	// Enemy spawns for current round
+	// enemy spawns
 	g.spawnTimer--
 	if g.spawnTimer <= 0 && g.roundIdx < len(rounds) {
 		if g.roundSpawned < rounds[g.roundIdx] {
@@ -364,7 +351,7 @@ func (g *Game) Update() error {
 		g.spawnTimer = spawnInterval(g.roundIdx)
 	}
 
-	// Move bullets + bullet→enemy hits.
+	// bullets move + collide
 	dead := make(map[resolv.IShape]bool)
 	bw := 0
 	for i := 0; i < len(g.bullets); i++ {
@@ -378,12 +365,12 @@ func (g *Game) Update() error {
 			OnIntersect: func(set resolv.IntersectionSet) bool {
 				dead[set.OtherShape] = true
 				hit = true
-				return false // stop after first hit
+				return false
 			},
 		})
 
 		if !hit && b.y+bulletSize > 0 {
-			g.bullets[bw] = b // keep
+			g.bullets[bw] = b
 			bw++
 		} else {
 			g.space.Remove(b.sh)
@@ -396,14 +383,14 @@ func (g *Game) Update() error {
 	}
 	g.bullets = g.bullets[:bw]
 
-	// Move enemies; hitting player or passing the bottom costs a life.
+	// enemies move; player/escape checks
 	ew := 0
 	for i := 0; i < len(g.enemies); i++ {
 		e := g.enemies[i]
 		e.y += e.vy
 		e.sh.SetPosition(e.x, e.y)
 
-		// enemy → player (only if not currently invincible)
+		// enemy → player (only if not invincible)
 		if g.inv == 0 {
 			hitP := false
 			g.playerSh.IntersectionTest(resolv.IntersectionTestSettings{
@@ -415,7 +402,7 @@ func (g *Game) Update() error {
 			}
 		}
 
-		// remove dead or escaped enemies
+		// remove if killed or escaped
 		if dead[e.sh] {
 			g.space.Remove(e.sh)
 			continue
@@ -431,7 +418,7 @@ func (g *Game) Update() error {
 	}
 	g.enemies = g.enemies[:ew]
 
-	// Round complete? Move to next; after last, mark win.
+	// round advance
 	if g.roundIdx < len(rounds) && g.roundKills >= rounds[g.roundIdx] {
 		g.roundIdx++
 		g.roundKills, g.roundSpawned = 0, 0
@@ -444,24 +431,29 @@ func (g *Game) Update() error {
 	return nil
 }
 
-// drawing (screen render)
+// === DRAW (render) ===
+
 func (g *Game) Draw(screen *ebiten.Image) {
-	// draw background (image tiled vertically), else draw stars
+	// background → COVER: scale to fill entire screen, tile vertically for scroll
 	if g.bgImg != nil {
-		h := g.bgImg.Bounds().Dy()
-		start := -int(g.bgOff)
-		for y := start; y < screenH; y += h {
+		bw := g.bgImg.Bounds().Dx()
+		bh := g.bgImg.Bounds().Dy()
+
+		scale := math.Max(float64(screenW)/float64(bw), float64(screenH)/float64(bh)) // cover scaling
+		scaledH := float64(bh) * scale
+
+		off := math.Mod(g.bgOff, scaledH) // smooth wrap
+		startY := -off
+
+		for y := startY; y < float64(screenH); y += scaledH {
 			op := &ebiten.DrawImageOptions{}
-			op.GeoM.Translate(0, float64(y))
+			op.GeoM.Scale(scale, scale)
+			op.GeoM.Translate(0, y)
 			screen.DrawImage(g.bgImg, op)
-		}
-	} else {
-		for _, s := range g.stars {
-			ebitenutil.DrawRect(screen, s.x, s.y, 2, 2, color.RGBA{200, 200, 220, 255})
 		}
 	}
 
-	// draw player 
+	// player (sprite or rect that blinks during i-frames)
 	if g.playerImg != nil {
 		w, h := g.playerImg.Bounds().Dx(), g.playerImg.Bounds().Dy()
 		op := &ebiten.DrawImageOptions{}
@@ -471,7 +463,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	} else {
 		col := color.RGBA{20, 20, 28, 255}
 		if g.inv > 0 && (g.inv/4)%2 == 0 {
-			col = color.RGBA{80, 80, 100, 255}
+			col = color.RGBA{80, 80, 100, 255} // blink
 		}
 		ebitenutil.DrawRect(screen, g.px, g.py, playerSize, playerSize, col)
 	}
@@ -502,7 +494,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	// end messages (no restart available)
+	// end messages
 	if g.win {
 		drawCenterPanel(screen, "YOU WIN!", "")
 		return
@@ -512,7 +504,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		return
 	}
 
-	// simple HUD to show progress + speeds 
+	// HUD
 	msg := fmt.Sprintf(
 		"Round: %d/6 | Kills: %d/%d\nLives: %d | FireDelay: %d | EnemySpd: %.2f",
 		g.roundIdx+1,
@@ -524,7 +516,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 func (g *Game) Layout(_, _ int) (int, int) { return screenW, screenH }
 
-// basic center panel (text only)
+// center panel for end text
 func drawCenterPanel(screen *ebiten.Image, line1, line2 string) {
 	px := (screenW - panelW) / 2
 	py := (screenH - panelH) / 2
@@ -536,7 +528,8 @@ func drawCenterPanel(screen *ebiten.Image, line1, line2 string) {
 	screen.DrawImage(panel, op)
 }
 
-// program entry
+// === ENTRY POINT ===
+
 func main() {
 	ebiten.SetWindowTitle("Top Scroller")
 	ebiten.SetWindowSize(screenW, screenH)
@@ -544,3 +537,4 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
