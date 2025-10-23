@@ -172,12 +172,12 @@ func newGame() *Game {
 // === AUDIO ===
 
 func (g *Game) initAudio() {
-	g.audioCtx = audio.NewContext(sampleRate)
+	g.audioCtx = audio.NewContext(sampleRate) // audio engine
 
 	if p, err := loadWav(g.audioCtx, "assets/shoot.wav"); err == nil {
-		g.sShoot = p
+		g.sShoot = p          // shootinh sound 
 	} else {
-		g.sShoot = newBeep(g.audioCtx, 950, 0.07)
+		g.sShoot = newBeep(g.audioCtx, 950, 0.07) // beeep
 	}
 	if p, err := loadWav(g.audioCtx, "assets/hit.wav"); err == nil {
 		g.sHit = p
@@ -236,7 +236,7 @@ func (g *Game) initImages() {
 		"assets/background.jpg", "assets/space.jpg",
 	} {
 		if img, _, err := ebitenutil.NewImageFromFile(name); err == nil {
-			g.bgImg = img
+			g.bgImg = img  // this loads the win screen
 			break
 		}
 	}
@@ -281,7 +281,7 @@ func (g *Game) loseLife() {
 func (g *Game) Update() error {
 	// stop logic after end state
 	if g.win || g.over {
-		return nil
+		return nil// freeze gameplay if win/lose
 	}
 
 	// background scroll accumulator (wrap happens in Draw)
@@ -324,15 +324,16 @@ func (g *Game) Update() error {
 	}
 
 	// shooting (Space/J) with cooldown
-	if g.cooldown > 0 {
-		g.cooldown--
-	}
+	if g.cooldown > 0 {	g.cooldown--	}
+
+	// if space or J is pressed make a bullet
 	if (ebiten.IsKeyPressed(ebiten.KeySpace) || ebiten.IsKeyPressed(ebiten.KeyJ)) && g.cooldown == 0 {
-		bx := g.px + playerSize/2 - bulletSize/2
-		by := g.py - bulletSize
-		sh := resolv.NewRectangleFromTopLeft(bx, by, bulletSize, bulletSize)
+		bx := g.px + playerSize/2 - bulletSize/2 // centers the bullet on player
+		by := g.py - bulletSize // makes it so that the bullet spawns a little above the player
+		sh := resolv.NewRectangleFromTopLeft(bx, by, bulletSize, bulletSize) // setting up the bullet hitbox
 		sh.Tags().Set(tagBullet)
-		g.space.Add(sh)
+		g.space.Add(sh) //registers the collisions
+	
 		g.bullets = append(g.bullets, bullet{x: bx, y: by, vy: bulletSpeed, sh: sh})
 		g.cooldown = fireDelay(g.roundIdx)
 		g.play(g.sShoot)
@@ -421,10 +422,10 @@ func (g *Game) Update() error {
 
 	// round advance
 	if g.roundIdx < len(rounds) && g.roundKills >= rounds[g.roundIdx] {
-		g.roundIdx++
-		g.roundKills, g.roundSpawned = 0, 0
-		g.spawnTimer = spawnInterval(g.roundIdx)
-		if g.roundIdx >= len(rounds) {
+		g.roundIdx++ // go to next round
+		g.roundKills, g.roundSpawned = 0, 0 //reset the counters for the new round
+		g.spawnTimer = spawnInterval(g.roundIdx) //sets new spawn speed for this round
+		if g.roundIdx >= len(rounds) { //if we go past the last round = WIN1
 			g.win = true
 		}
 	}
@@ -439,11 +440,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	if g.bgImg != nil {
 		bw := g.bgImg.Bounds().Dx()
 		bh := g.bgImg.Bounds().Dy()
-
+		// background scalling : make the background fill the whole screen
 		scale := math.Max(float64(screenW)/float64(bw), float64(screenH)/float64(bh)) // cover scaling
 		scaledH := float64(bh) * scale
 
-		off := math.Mod(g.bgOff, scaledH) // smooth wrap
+		off := math.Mod(g.bgOff, scaledH) // loop
 		startY := -off
 
 		for y := startY; y < float64(screenH); y += scaledH {
@@ -470,11 +471,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 
 	// bullets
-	for _, b := range g.bullets {
+	for _, b := range g.bullets {  // loop over the bullet
 		if g.bulletImg != nil {
 			w, h := g.bulletImg.Bounds().Dx(), g.bulletImg.Bounds().Dy()
-			op := &ebiten.DrawImageOptions{}
-			op.GeoM.Scale(bulletSize/float64(w), bulletSize/float64(h))
+			op := &ebiten.DrawImageOptions{} //settings for drawing
+			op.GeoM.Scale(bulletSize/float64(w), bulletSize/float64(h)) // just the sprites orginal width/height
 			op.GeoM.Translate(b.x, b.y)
 			screen.DrawImage(g.bulletImg, op)
 		} else {
