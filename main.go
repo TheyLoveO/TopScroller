@@ -123,9 +123,10 @@ type Game struct {
 }
 
 // === DIFFICULTY HELPERS ===
-
+//*controls how fast the enemy falls each round 
 func enemySpeed(r int) float64 { return baseEnemySpeed + 0.3*float64(r) }
 
+//controls how often enemies spawn each round 
 func spawnInterval(r int) int {
 	n := baseSpawnInterval - 2*r
 	if n < minSpawnInterval {
@@ -133,7 +134,7 @@ func spawnInterval(r int) int {
 	}
 	return n
 }
-
+//allows the user to shoot faster in later rounds
 func fireDelay(r int) int {
 	d := 10 - r/2
 	if d < 8 {
@@ -151,7 +152,7 @@ func newGame() *Game {
 	g.px = screenW/2 - playerSize/2
 	g.py = screenH - 2*playerSize
 
-	// resolv space (32x32 cells)
+	// resolv space (32x32 cells) builds user hitbox and registers rhat enemies can collide
 	g.space = resolv.NewSpace(screenW, screenH, 32, 32)
 	g.playerSh = resolv.NewRectangleFromTopLeft(g.px, g.py, playerSize, playerSize)
 	g.space.Add(g.playerSh)
